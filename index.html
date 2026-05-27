@@ -43,6 +43,11 @@ body{font-family:'Outfit',sans-serif;background:var(--bg);color:var(--text);max-
 .app-logo{font-family:'Space Mono',monospace;font-size:17px;font-weight:700;color:var(--accent);letter-spacing:-0.5px}
 .app-logo span{color:var(--text2);font-weight:400}
 .header-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.home-btn{background:var(--surf3);border:1px solid var(--border);color:var(--text2);font-size:13px;padding:5px 10px;border-radius:8px;cursor:pointer;font-family:'Outfit',sans-serif;font-weight:600;display:none;align-items:center;gap:4px;transition:all .2s}
+.home-btn:active{opacity:.7}
+.home-btn.visible{display:flex}
+.export-btn{background:var(--surf3);border:1px solid var(--border);color:var(--p-low);font-size:11px;padding:5px 10px;border-radius:8px;cursor:pointer;font-family:'Outfit',sans-serif;font-weight:700;display:flex;align-items:center;gap:4px;transition:all .2s}
+.export-btn:active{opacity:.7}
 .unseen-pill{background:var(--p-urgent);color:#fff;font-size:9px;font-weight:700;padding:3px 8px;border-radius:10px;font-family:'Space Mono',monospace;display:none;animation:pulse-badge 1.5s infinite}
 @keyframes pulse-badge{0%,100%{opacity:1}50%{opacity:.7}}
 
@@ -238,6 +243,8 @@ input[type="datetime-local"]{color-scheme:dark}
 <header class="app-header">
   <div class="app-logo">Task<span>Ops</span></div>
   <div class="header-right">
+    <button class="home-btn" id="homeBtn" onclick="switchTab('home')">🏠 Home</button>
+    <button class="export-btn" onclick="exportAllTasks()">⬇️ Export</button>
     <span id="unseenPill" class="unseen-pill">0 NEW</span>
   </div>
 </header>
@@ -396,9 +403,8 @@ input[type="datetime-local"]{color-scheme:dark}
       <div id="tasksList"></div>
     </div>
   </div>
-</div>
 
-<!-- ── BOTTOM NAV ── -->
+</div>
 <nav class="bottom-nav">
   <button class="nav-btn active" id="nav-home" onclick="switchTab('home')">
     <span class="nav-icon">🏠</span><span class="nav-label">Home</span>
@@ -503,26 +509,77 @@ input[type="datetime-local"]{color-scheme:dark}
 <div class="toast" id="toast"></div>
 
 <script>
-// ───────────────────── DATA ─────────────────────
-let tasks = JSON.parse(localStorage.getItem('taskops') || '[]');
+const STORAGE_KEY = 'taskops_data_v1';
+let tasks = JSON.parse(localStorage.getItem(STORAGE_KEY) || localStorage.getItem('To-Do-List') || '[]');
 let selP = 'medium';
 let activeId = null;
 let curFilter = 'all';
 
-function save() { localStorage.setItem('taskops', JSON.stringify(tasks)); }
+function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks)); }
 function genId() { return Date.now().toString(36) + Math.random().toString(36).substr(2,5); }
 
+// ───────────────────── EXPORT ─────────────────────
+function exportAllTasks() {
+  if (tasks.length === 0) { toast('⚠️ No tasks to export'); return; }
+  const headers = ['ID','Task Name','Priority','Type','Store','Status','Deadline','Created At','Completed At','TAT','Rescheduled','Reschedule Count','Cancel Reason','Alarm','Reschedule History'];
+  const rows = tasks.map(t => {
+    const tat = t.completedAt ? calcTAT(t.createdAt, t.completedAt) : '';
+    const hist = t.rescheduleHistory.map(h=>`[${fmtDt(h.newDeadline)}: ${h.remarks}]`).join(' | ');
+    return [
+      t.id,
+      '"' + (t.name||'').replace(/"/g,'""') + '"',
+      t.priority,
+      t.type,
+      fmtStore(t.store),
+      t.status,
+      fmtDt(t.deadline),
+      fmtDt(t.createdAt),
+      t.completedAt ? fmtDt(t.completedAt) : '',
+      tat,
+      t.rescheduled ? 'Yes' : 'No',
+      t.rescheduleCount || 0,
+      '"' + (t.cancelRemarks||'').replace(/"/g,'""') + '"',
+      t.alarm ? 'Yes' : 'No',
+      '"' + hist.replace(/"/g,'""') + '"'
+    ].join(',');
+  });
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'TaskOps_Export_' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('📥 Exported ' + tasks.length + ' tasks!');
+}
+
 // ───────────────────── TAB NAV ─────────────────────
-function switchTab(tab) {
+let tabHistory = ['home']; // track navigation history
+
+function switchTab(tab, pushState = true) {
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + tab).classList.add('active');
   document.getElementById('nav-' + tab).classList.add('active');
   document.getElementById('fab').style.display = tab === 'new-task' ? 'none' : 'flex';
+  // Show home button whenever not on home tab
+  const homeBtn = document.getElementById('homeBtn');
+  homeBtn.classList.toggle('visible', tab !== 'home');
+  if (pushState) {
+    history.pushState({ tab }, '', '#' + tab);
+  }
   if (tab === 'home') renderHome();
   if (tab === 'tasks') { markAllSeen(); renderTasks(); }
   if (tab === 'new-task') resetForm();
 }
+
+// Handle phone/browser back button
+window.addEventListener('popstate', function(e) {
+  const tab = (e.state && e.state.tab) || 'home';
+  switchTab(tab, false);
+});
 
 // ───────────────────── FORM ─────────────────────
 function selPriority(p) {
@@ -591,7 +648,7 @@ function triggerAlarm(id) {
     <button class="alarm-close" onclick="this.parentElement.remove()">×</button>`;
   area.prepend(el);
   if ('Notification' in window && Notification.permission === 'granted') {
-    new Notification('TaskOps ⏰', { body: `Due in 1 hour: ${t.name}` });
+    new Notification('To-Do-List ⏰', { body: `Due in 1 hour: ${t.name}` });
   }
 }
 
@@ -935,6 +992,8 @@ function init() {
   const d=new Date(); d.setHours(d.getHours()+24);
   document.getElementById('fDeadline').value = dtLocal(d);
   tasks.filter(t=>t.alarm&&t.status==='pending').forEach(scheduleAlarm);
+  // Set up initial history state
+  history.replaceState({ tab: 'home' }, '', '#home');
   renderHome();
   updateBadges();
   setInterval(()=>{
